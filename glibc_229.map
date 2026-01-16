@@ -1,0 +1,11 @@
+GLIBC_2.27 {
+    global:
+        powf;
+    local: *;
+};
+
+GLIBC_2.29 {
+    global:
+        pow;
+        log2;
+} GLIBC_2.27;
