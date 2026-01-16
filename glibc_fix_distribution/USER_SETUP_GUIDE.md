@@ -72,6 +72,13 @@ cat > activate_cosmos.sh << 'EOF'
 #!/bin/bash
 set -e
 
+# Check if script is being sourced (not executed)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    echo "ERROR: This script must be sourced, not executed!"
+    echo "Usage: source activate_cosmos.sh"
+    exit 1
+fi
+
 # UPDATE THIS PATH to your cosmos-transfer2.5 directory
 COSMOS_REPO_PATH=<update-with-the-absolute-path-to-your-cosmos-repo-directory>
 cd $COSMOS_REPO_PATH
@@ -82,7 +89,8 @@ module load system/cuda/12.8.1
 # Activate Python environment
 source .venv/bin/activate
 
-# Set library path
+# Set library path to use glibc-compat libraries
+# Note: We don't need to activate micromamba here - we only need the library path
 export LD_LIBRARY_PATH="$HOME/.local/share/mamba/envs/glibc-compat/lib:${LD_LIBRARY_PATH}"
 
 echo "✅ Cosmos environment activated"
@@ -92,7 +100,15 @@ EOF
 chmod +x activate_cosmos.sh
 ```
 
+**IMPORTANT**: You must use `source` to run this script:
+```bash
+source activate_cosmos.sh    # Correct ✅
+./activate_cosmos.sh         # Wrong ❌ (runs in subshell, changes are lost)
+```
+
 **Important**: Edit `activate_cosmos.sh` and replace `<update-with-the-absolute-path-to-your-cosmos-repo-directory>` with your actual path, e.g., `/lustre/nec/ws3/ws/yourusername/cosmos-transfer2.5`
+
+**Note**: The micromamba `glibc-compat` environment does NOT need to be activated at runtime. It was only needed during setup (Step 1 and Step 3) to install and run patchelf. At runtime, we only need `LD_LIBRARY_PATH` to point to its libraries.
 
 ### Step 5: Test It Works
 
