@@ -16,10 +16,49 @@ You should have received these files:
 
 ---
 
-## Quick Setup (5 Steps)
+## Step 1: Set Up Micromamba Environment
 
-### Step 1: Create Micromamba Environment
+You have two options:
 
+### Option A: Use the Shared Environment (Recommended)
+
+A pre-configured environment is available at:
+```
+/lustre/nec/ws3/ws/hpckkuec-cosmos/micromamba-env
+```
+
+You can use this directly - no installation needed. Skip to Step 2.
+
+**Or** copy it to your workspace for better performance:
+```bash
+cp -r /lustre/nec/ws3/ws/hpckkuec-cosmos/micromamba-env /path/to/your/workspace/
+```
+
+### Option B: Create Your Own Environment
+
+If you prefer to create your own environment:
+
+**First, install micromamba** (if not already installed):
+```bash
+# Download micromamba
+curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xvj bin/micromamba
+
+# Create directory and move binary
+mkdir -p ~/.local/bin
+mv bin/micromamba ~/.local/bin/
+rmdir bin
+
+# Initialize micromamba (adds to ~/.bashrc)
+~/.local/bin/micromamba shell init -s bash -p ~/.local/share/mamba
+
+# Reload shell configuration
+source ~/.bashrc
+
+# Verify installation
+micromamba --version
+```
+
+**Then create the environment:**
 ```bash
 micromamba create -n glibc-compat -y
 micromamba activate glibc-compat
@@ -30,7 +69,13 @@ micromamba install -c conda-forge -y \
   patchelf
 ```
 
-This installs required libraries (~1GB download).
+This installs required libraries (~665 MB).
+
+**What these packages provide:**
+- `libstdcxx-ng` - Newer C++ standard library (GLIBCXX 3.4.26)
+- `libgcc-ng` - GCC runtime library
+- `cudnn` - CUDA Deep Neural Network library
+- `patchelf` - Tool to modify ELF binaries (used in Step 3)
 
 ### Step 2: Copy the Wrapper Library
 
@@ -43,24 +88,41 @@ cd /path/to/your/cosmos-transfer2.5/
 
 ### Step 3: Backup and Patch transformer_engine
 
+There are **two** `.so` files that need patching:
+
 ```bash
-# Backup original
-cp .venv/lib/python3.10/site-packages/transformer_engine/libtransformer_engine.so \
-   .venv/lib/python3.10/site-packages/transformer_engine/libtransformer_engine.so.backup
-
-# Get your absolute path
+# Set your paths
 COSMOS_DIR=$(pwd)
-CONDA_LIB="$HOME/.local/share/mamba/envs/glibc-compat/lib"
+TE_DIR=".venv/lib/python3.10/site-packages/transformer_engine"
 
-# Patch RPATH
-micromamba run -n glibc-compat patchelf \
-  --set-rpath "${COSMOS_DIR}:${CONDA_LIB}" \
-  .venv/lib/python3.10/site-packages/transformer_engine/libtransformer_engine.so
+# Set MAMBA_ENV based on which option you chose in Step 1:
+# Option A (shared environment):
+MAMBA_ENV="/lustre/nec/ws3/ws/hpckkuec-cosmos/micromamba-env"
+# Option B (your own environment):
+# MAMBA_ENV="$HOME/.local/share/mamba/envs/glibc-compat"
 
-# Replace libm dependency
-micromamba run -n glibc-compat patchelf \
+# Backup originals
+cp ${TE_DIR}/libtransformer_engine.so ${TE_DIR}/libtransformer_engine.so.backup
+cp ${TE_DIR}/transformer_engine_torch.cpython-310-x86_64-linux-gnu.so \
+   ${TE_DIR}/transformer_engine_torch.cpython-310-x86_64-linux-gnu.so.backup
+
+# Patch libtransformer_engine.so
+${MAMBA_ENV}/bin/patchelf \
+  --set-rpath "${COSMOS_DIR}:${MAMBA_ENV}/lib" \
+  ${TE_DIR}/libtransformer_engine.so
+${MAMBA_ENV}/bin/patchelf \
   --replace-needed libm.so.6 libglibc_compat_wrapper.so \
-  .venv/lib/python3.10/site-packages/transformer_engine/libtransformer_engine.so
+  ${TE_DIR}/libtransformer_engine.so
+
+# Patch transformer_engine_torch.cpython-310-x86_64-linux-gnu.so
+${MAMBA_ENV}/bin/patchelf \
+  --set-rpath "${COSMOS_DIR}:${MAMBA_ENV}/lib" \
+  ${TE_DIR}/transformer_engine_torch.cpython-310-x86_64-linux-gnu.so
+${MAMBA_ENV}/bin/patchelf \
+  --replace-needed libm.so.6 libglibc_compat_wrapper.so \
+  ${TE_DIR}/transformer_engine_torch.cpython-310-x86_64-linux-gnu.so
+
+echo "✅ Both .so files patched"
 ```
 
 ### Step 4: Create Activation Script
@@ -70,7 +132,6 @@ Create a file named `activate_cosmos.sh` in your cosmos-transfer2.5 directory:
 ```bash
 cat > activate_cosmos.sh << 'EOF'
 #!/bin/bash
-set -e
 
 # Check if script is being sourced (not executed)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
@@ -79,8 +140,15 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
-# UPDATE THIS PATH to your cosmos-transfer2.5 directory
+# UPDATE THESE PATHS:
 COSMOS_REPO_PATH=<update-with-the-absolute-path-to-your-cosmos-repo-directory>
+
+# Set MAMBA_ENV based on which option you chose in Step 1:
+# Option A (shared environment):
+MAMBA_ENV="/lustre/nec/ws3/ws/hpckkuec-cosmos/micromamba-env"
+# Option B (your own environment):
+# MAMBA_ENV="$HOME/.local/share/mamba/envs/glibc-compat"
+
 cd $COSMOS_REPO_PATH
 
 # Load CUDA
@@ -90,8 +158,11 @@ module load system/cuda/12.8.1
 source .venv/bin/activate
 
 # Set library path to use glibc-compat libraries
-# Note: We don't need to activate micromamba here - we only need the library path
-export LD_LIBRARY_PATH="$HOME/.local/share/mamba/envs/glibc-compat/lib:${LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="${MAMBA_ENV}/lib:${LD_LIBRARY_PATH}"
+
+# Set Hugging Face cache directory
+export HF_HOME="$COSMOS_REPO_PATH/huggingface-models"
+mkdir -p $HF_HOME
 
 echo "✅ Cosmos environment activated"
 echo "You can now run Python scripts with transformer_engine support."
@@ -106,9 +177,9 @@ source activate_cosmos.sh    # Correct ✅
 ./activate_cosmos.sh         # Wrong ❌ (runs in subshell, changes are lost)
 ```
 
-**Important**: Edit `activate_cosmos.sh` and replace `<update-with-the-absolute-path-to-your-cosmos-repo-directory>` with your actual path, e.g., `/lustre/nec/ws3/ws/yourusername/cosmos-transfer2.5`
-
-**Note**: The micromamba `glibc-compat` environment does NOT need to be activated at runtime. It was only needed during setup (Step 1 and Step 3) to install and run patchelf. At runtime, we only need `LD_LIBRARY_PATH` to point to its libraries.
+**Important**: Edit `activate_cosmos.sh` and update:
+1. `COSMOS_REPO_PATH` - Your cosmos-transfer2.5 directory path
+2. `MAMBA_ENV` - Uncomment the correct option based on Step 1
 
 ### Step 5: Test It Works
 
